@@ -1,12 +1,38 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+'use strict';
+var flyd = require('flyd');
+var patch = require('snabbdom').init([require('snabbdom/modules/class'), require('snabbdom/modules/style'), require('snabbdom/modules/props'), require('snabbdom/modules/attributes'), require('snabbdom/modules/eventlisteners')]);
+
+module.exports = function (mod, container) {
+  var action$ = flyd.stream();
+  var model$ = flyd.scan(function (model, action) {
+    var newStateInfo = mod.update(model, action);
+    var newState = newStateInfo[0],
+        sideEffectP = newStateInfo[1];
+
+    if (sideEffectP) {
+      sideEffectP.then(action$);
+    }
+
+    return newState;
+  }, mod.init(), action$);
+  var vnode$ = flyd.map(mod.view(action$), model$);
+
+  flyd.scan(patch, container, vnode$);
+
+  return {
+    action$: action$,
+    model$: model$,
+    vnode$: vnode$
+  };
+};
+
+},{"flyd":14,"snabbdom":26,"snabbdom/modules/attributes":21,"snabbdom/modules/class":22,"snabbdom/modules/eventlisteners":23,"snabbdom/modules/props":24,"snabbdom/modules/style":25}],2:[function(require,module,exports){
 /* jshint esnext: true */
 'use strict';
 
 var R = require('ramda');
 var Type = require('union-type');
-var flyd = require('flyd');
-var stream = flyd.stream;
-var patch = require('snabbdom').init([require('snabbdom/modules/class'), require('snabbdom/modules/props'), require('snabbdom/modules/eventlisteners'), require('snabbdom/modules/style')]);
 var h = require('snabbdom/h');
 
 // Update
@@ -15,11 +41,12 @@ var Action = Type({ Increment: [], Decrement: [] });
 var update = function update(model, action) {
   return Action['case']({
     Increment: function Increment() {
-      return model + 1;
+      return [model + 1];
     },
     Decrement: function Decrement() {
-      return model - 1;
-    } }, action);
+      return [model - 1];
+    }
+  }, action);
 };
 
 // View
@@ -31,395 +58,30 @@ var countStyle = {
   fontSize: '20px',
   fontFamily: 'monospace',
   width: '50px',
-  textAlign: 'center' };
+  textAlign: 'center'
+};
 
-// Streams
-var actions$ = stream(); // All modifications to the state originate here
-var model$ = flyd.scan(update, 0, actions$); // Contains the entire state of the application
-var vnode$ = flyd.map(view(actions$), model$); // Stream of virtual nodes to render
+module.exports = {
+  init: R.always(0),
+  Action: Action,
+  update: update,
+  view: view
+};
 
-// flyd.map(console.log.bind(console), model$); // Uncomment to log state on every update
+},{"ramda":4,"snabbdom/h":5,"union-type":13}],3:[function(require,module,exports){
+/* jshint esnext: true */
+'use strict';
+
+var counter = require('./counter');
+var createElement = require('../../../createElement');
 
 // Begin rendering when the DOM is ready
 window.addEventListener('DOMContentLoaded', function () {
   var container = document.getElementById('container');
-  flyd.scan(patch, container, vnode$);
+  createElement(counter, container);
 });
 
-},{"flyd":2,"ramda":3,"snabbdom":16,"snabbdom/h":10,"snabbdom/modules/class":12,"snabbdom/modules/eventlisteners":13,"snabbdom/modules/props":14,"snabbdom/modules/style":15,"union-type":18}],2:[function(require,module,exports){
-(function (root, factory) {
-  if (typeof define === 'function' && define.amd) {
-    define([], factory); // AMD. Register as an anonymous module.
-  } else if (typeof exports === 'object') {
-    module.exports = factory(); // NodeJS
-  } else { // Browser globals (root is window)
-    root.flyd = factory();
-  }
-}(this, function () {
-
-'use strict';
-
-function isFunction(obj) {
-  return !!(obj && obj.constructor && obj.call && obj.apply);
-}
-
-function notUndef(v) {
-  return v !== undefined;
-}
-
-var toUpdate = [];
-var inStream;
-
-function map(f, s) {
-  return stream([s], function(self) { self(f(s())); });
-}
-
-function boundMap(f) { return map(f, this); }
-
-var scan = curryN(3, function(f, acc, s) {
-  var ns = stream([s], function() {
-    return (acc = f(acc, s()));
-  });
-  if (!ns.hasVal) ns(acc);
-  return ns;
-});
-
-var merge = curryN(2, function(s1, s2) {
-  var s = immediate(stream([s1, s2], function(n, changed) {
-    return changed[0] ? changed[0]()
-         : s1.hasVal  ? s1()
-                      : s2();
-  }));
-  endsOn(stream([s1.end, s2.end], function(self, changed) {
-    return true;
-  }), s);
-  return s;
-});
-
-function ap(s2) {
-  var s1 = this;
-  return stream([s1, s2], function() { return s1()(s2()); });
-}
-
-function initialDepsNotMet(stream) {
-  stream.depsMet = stream.deps.every(function(s) {
-    return s.hasVal;
-  });
-  return !stream.depsMet;
-}
-
-function updateStream(s) {
-  if ((s.depsMet !== true && initialDepsNotMet(s)) ||
-      (s.end !== undefined && s.end.val === true)) return;
-  inStream = s;
-  var returnVal = s.fn(s, s.depsChanged);
-  if (returnVal !== undefined) {
-    s(returnVal);
-  }
-  inStream = undefined;
-  while (s.depsChanged.length > 0) s.depsChanged.shift();
-}
-
-var order = [];
-var orderNextIdx = -1;
-
-function findDeps(s) {
-  var i, listeners = s.listeners;
-  if (s.queued === false) {
-    s.queued = true;
-    for (i = 0; i < listeners.length; ++i) {
-      findDeps(listeners[i]);
-    }
-    order[++orderNextIdx] = s;
-  }
-}
-
-function updateDeps(s) {
-  var i, list, listeners = s.listeners;
-  for (i = 0; i < listeners.length; ++i) {
-    list = listeners[i];
-    if (list.end === s) {
-      endStream(list);
-    } else {
-      list.depsChanged.push(s);
-      findDeps(list);
-    }
-  }
-  for (i = orderNextIdx; i >= 0; --i) {
-    if (order[i].depsChanged !== undefined && order[i].depsChanged.length > 0) {
-      updateStream(order[i]);
-    }
-    order[i].queued = false;
-  }
-  orderNextIdx = -1;
-}
-
-function flushUpdate() {
-  while (toUpdate.length > 0) updateDeps(toUpdate.shift());
-}
-
-function isStream(stream) {
-  return isFunction(stream) && 'hasVal' in stream;
-}
-
-function streamToString() {
-  return 'stream(' + this.val + ')';
-}
-
-function createStream() {
-  function s(n) {
-    var i, list;
-    if (arguments.length === 0) {
-      return s.val;
-    } else {
-      if (n !== undefined && n !== null && isFunction(n.then)) {
-        n.then(s);
-        return;
-      }
-      s.val = n;
-      s.hasVal = true;
-      if (inStream === undefined) {
-        updateDeps(s);
-        if (toUpdate.length !== 0) flushUpdate();
-      } else if (inStream === s) {
-        for (i = 0; i < s.listeners.length; ++i) {
-          list = s.listeners[i];
-          if (list.end !== s) list.depsChanged.push(s);
-          else endStream(list);
-        }
-      } else {
-        toUpdate.push(s);
-      }
-      return s;
-    }
-  }
-  s.hasVal = false;
-  s.val = undefined;
-  s.listeners = [];
-  s.queued = false;
-  s.end = undefined;
-
-  s.map = boundMap;
-  s.ap = ap;
-  s.of = stream;
-  s.toString = streamToString;
-
-  return s;
-}
-
-function createDependentStream(deps, fn) {
-  var i, s = createStream();
-  s.fn = fn;
-  s.deps = deps;
-  s.depsMet = false;
-  s.depsChanged = [];
-  for (i = 0; i < deps.length; ++i) {
-    deps[i].listeners.push(s);
-  }
-  return s;
-}
-
-function immediate(s) {
-  if (s.depsMet === false) {
-    s.depsMet = true;
-    updateStream(s);
-    if (toUpdate.length !== 0) flushUpdate();
-  }
-  return s;
-}
-
-function removeListener(s, listeners) {
-  var idx = listeners.indexOf(s);
-  listeners[idx] = listeners[listeners.length - 1];
-  listeners.length--;
-}
-
-function detachDeps(s) {
-  for (var i = 0; i < s.deps.length; ++i) {
-    removeListener(s, s.deps[i].listeners);
-  }
-  s.deps.length = 0;
-}
-
-function endStream(s) {
-  if (s.deps !== undefined) detachDeps(s);
-  if (s.end !== undefined) detachDeps(s.end);
-}
-
-function endsOn(endS, s) {
-  detachDeps(s.end);
-  endS.listeners.push(s.end);
-  s.end.deps.push(endS);
-  return s;
-}
-
-function stream(arg, fn) {
-  var s, deps;
-  var endStream = createDependentStream([], function() { return true; });
-  if (arguments.length > 1) {
-    deps = arg.filter(notUndef);
-    s = createDependentStream(deps, fn);
-    s.end = endStream;
-    endStream.listeners.push(s);
-    var depEndStreams = deps.map(function(d) { return d.end; }).filter(notUndef);
-    endsOn(createDependentStream(depEndStreams, function() { return true; }, true), s);
-    updateStream(s);
-    if (toUpdate.length !== 0) flushUpdate();
-  } else {
-    s = createStream();
-    s.end = endStream;
-    endStream.listeners.push(s);
-    if (arguments.length === 1) s(arg);
-  }
-  return s;
-}
-
-var transduce = curryN(2, function(xform, source) {
-  xform = xform(new StreamTransformer());
-  return stream([source], function(self) {
-    var res = xform['@@transducer/step'](undefined, source());
-    if (res && res['@@transducer/reduced'] === true) {
-      self.end(true);
-      return res['@@transducer/value'];
-    } else {
-      return res;
-    }
-  });
-});
-
-function StreamTransformer() { }
-StreamTransformer.prototype['@@transducer/init'] = function() { };
-StreamTransformer.prototype['@@transducer/result'] = function() { };
-StreamTransformer.prototype['@@transducer/step'] = function(s, v) { return v; };
-
-// Own curry implementation snatched from Ramda
-// Figure out something nicer later on
-var _ = {placeholder: true};
-
-// Detect both own and Ramda placeholder
-function isPlaceholder(p) {
-  return p === _ || (p && p.ramda === 'placeholder');
-}
-
-function toArray(arg) {
-  var arr = [];
-  for (var i = 0; i < arg.length; ++i) {
-    arr[i] = arg[i];
-  }
-  return arr;
-}
-
-// Modified versions of arity and curryN from Ramda
-function ofArity(n, fn) {
-  if (arguments.length === 1) {
-    return ofArity.bind(undefined, n);
-  }
-  switch (n) {
-  case 0:
-    return function () {
-      return fn.apply(this, arguments);
-    };
-  case 1:
-    return function (a0) {
-      void a0;
-      return fn.apply(this, arguments);
-    };
-  case 2:
-    return function (a0, a1) {
-      void a1;
-      return fn.apply(this, arguments);
-    };
-  case 3:
-    return function (a0, a1, a2) {
-      void a2;
-      return fn.apply(this, arguments);
-    };
-  case 4:
-    return function (a0, a1, a2, a3) {
-      void a3;
-      return fn.apply(this, arguments);
-    };
-  case 5:
-    return function (a0, a1, a2, a3, a4) {
-      void a4;
-      return fn.apply(this, arguments);
-    };
-  case 6:
-    return function (a0, a1, a2, a3, a4, a5) {
-      void a5;
-      return fn.apply(this, arguments);
-    };
-  case 7:
-    return function (a0, a1, a2, a3, a4, a5, a6) {
-      void a6;
-      return fn.apply(this, arguments);
-    };
-  case 8:
-    return function (a0, a1, a2, a3, a4, a5, a6, a7) {
-      void a7;
-      return fn.apply(this, arguments);
-    };
-  case 9:
-    return function (a0, a1, a2, a3, a4, a5, a6, a7, a8) {
-      void a8;
-      return fn.apply(this, arguments);
-    };
-  case 10:
-    return function (a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) {
-      void a9;
-      return fn.apply(this, arguments);
-    };
-  default:
-    throw new Error('First argument to arity must be a non-negative integer no greater than ten');
-  }
-}
-
-function curryN(length, fn) {
-  return ofArity(length, function () {
-    var n = arguments.length;
-    var shortfall = length - n;
-    var idx = n;
-    while (--idx >= 0) {
-      if (isPlaceholder(arguments[idx])) {
-        shortfall += 1;
-      }
-    }
-    if (shortfall <= 0) {
-      return fn.apply(this, arguments);
-    } else {
-      var initialArgs = toArray(arguments);
-      return curryN(shortfall, function () {
-        var currentArgs = toArray(arguments);
-        var combinedArgs = [];
-        var idx = -1;
-        while (++idx < n) {
-          var val = initialArgs[idx];
-          combinedArgs[idx] = isPlaceholder(val) ? currentArgs.shift() : val;
-        }
-        return fn.apply(this, combinedArgs.concat(currentArgs));
-      });
-    }
-  });
-}
-
-
-return {
-  stream: stream,
-  isStream: isStream,
-  transduce: transduce,
-  merge: merge,
-  reduce: scan, // Legacy
-  scan: scan,
-  endsOn: endsOn,
-  map: curryN(2, map),
-  curryN: curryN,
-  _: _,
-  immediate: immediate,
-};
-
-}));
-
-},{}],3:[function(require,module,exports){
+},{"../../../createElement":1,"./counter":2}],4:[function(require,module,exports){
 //  Ramda v0.14.0
 //  https://github.com/ramda/ramda
 //  (c) 2013-2015 Scott Sauyet, Michael Hurley, and David Chambers
@@ -7932,34 +7594,43 @@ return {
 
 }.call(this));
 
-},{}],4:[function(require,module,exports){
-/**
- * A special placeholder value used to specify "gaps" within curried functions,
- * allowing partial application of any combination of arguments,
- * regardless of their positions.
- *
- * If `g` is a curried ternary function and `_` is `R.__`, the following are equivalent:
- *
- *   - `g(1, 2, 3)`
- *   - `g(_, 2, 3)(1)`
- *   - `g(_, _, 3)(1)(2)`
- *   - `g(_, _, 3)(1, 2)`
- *   - `g(_, 2, _)(1, 3)`
- *   - `g(_, 2)(1)(3)`
- *   - `g(_, 2)(1, 3)`
- *   - `g(_, 2)(_, 3)(1)`
- *
- * @constant
- * @memberOf R
- * @category Function
- * @example
- *
- *      var greet = R.replace('{name}', R.__, 'Hello, {name}!');
- *      greet('Alice'); //=> 'Hello, Alice!'
- */
-module.exports = {ramda: 'placeholder'};
-
 },{}],5:[function(require,module,exports){
+var VNode = require('./vnode');
+var is = require('./is');
+
+module.exports = function h(sel, b, c) {
+  var data = {}, children, text, i;
+  if (arguments.length === 3) {
+    data = b;
+    if (is.array(c)) { children = c; }
+    else if (is.primitive(c)) { text = c; }
+  } else if (arguments.length === 2) {
+    if (is.array(b)) { children = b; }
+    else if (is.primitive(b)) { text = b; }
+    else { data = b; }
+  }
+  if (is.array(children)) {
+    for (i = 0; i < children.length; ++i) {
+      if (is.primitive(children[i])) children[i] = VNode(undefined, undefined, undefined, children[i]);
+    }
+  }
+  return VNode(sel, data, children, text, undefined);
+};
+
+},{"./is":6,"./vnode":7}],6:[function(require,module,exports){
+module.exports = {
+  array: Array.isArray,
+  primitive: function(s) { return typeof s === 'string' || typeof s === 'number'; },
+};
+
+},{}],7:[function(require,module,exports){
+module.exports = function(sel, data, children, text, elm) {
+  var key = data === undefined ? undefined : data.key;
+  return {sel: sel, data: data, children: children,
+          text: text, elm: elm, key: key};
+};
+
+},{}],8:[function(require,module,exports){
 var _curry2 = require('./internal/_curry2');
 
 
@@ -7976,6 +7647,7 @@ var _curry2 = require('./internal/_curry2');
  * @param {Function} fn The function to wrap.
  * @return {Function} A new function wrapping `fn`. The new function is
  *         guaranteed to be of arity `n`.
+ * @deprecated since v0.15.0
  * @example
  *
  *      var takesTwoArgs = function(a, b) {
@@ -7990,26 +7662,26 @@ var _curry2 = require('./internal/_curry2');
  *      takesOneArg(1, 2); //=> [1, 2]
  */
 module.exports = _curry2(function(n, fn) {
+  // jshint unused:vars
   switch (n) {
     case 0: return function() {return fn.apply(this, arguments);};
-    case 1: return function(a0) {void a0; return fn.apply(this, arguments);};
-    case 2: return function(a0, a1) {void a1; return fn.apply(this, arguments);};
-    case 3: return function(a0, a1, a2) {void a2; return fn.apply(this, arguments);};
-    case 4: return function(a0, a1, a2, a3) {void a3; return fn.apply(this, arguments);};
-    case 5: return function(a0, a1, a2, a3, a4) {void a4; return fn.apply(this, arguments);};
-    case 6: return function(a0, a1, a2, a3, a4, a5) {void a5; return fn.apply(this, arguments);};
-    case 7: return function(a0, a1, a2, a3, a4, a5, a6) {void a6; return fn.apply(this, arguments);};
-    case 8: return function(a0, a1, a2, a3, a4, a5, a6, a7) {void a7; return fn.apply(this, arguments);};
-    case 9: return function(a0, a1, a2, a3, a4, a5, a6, a7, a8) {void a8; return fn.apply(this, arguments);};
-    case 10: return function(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) {void a9; return fn.apply(this, arguments);};
+    case 1: return function(a0) {return fn.apply(this, arguments);};
+    case 2: return function(a0, a1) {return fn.apply(this, arguments);};
+    case 3: return function(a0, a1, a2) {return fn.apply(this, arguments);};
+    case 4: return function(a0, a1, a2, a3) {return fn.apply(this, arguments);};
+    case 5: return function(a0, a1, a2, a3, a4) {return fn.apply(this, arguments);};
+    case 6: return function(a0, a1, a2, a3, a4, a5) {return fn.apply(this, arguments);};
+    case 7: return function(a0, a1, a2, a3, a4, a5, a6) {return fn.apply(this, arguments);};
+    case 8: return function(a0, a1, a2, a3, a4, a5, a6, a7) {return fn.apply(this, arguments);};
+    case 9: return function(a0, a1, a2, a3, a4, a5, a6, a7, a8) {return fn.apply(this, arguments);};
+    case 10: return function(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) {return fn.apply(this, arguments);};
     default: throw new Error('First argument to arity must be a non-negative integer no greater than ten');
   }
 });
 
-},{"./internal/_curry2":8}],6:[function(require,module,exports){
-var __ = require('./__');
+},{"./internal/_curry2":11}],9:[function(require,module,exports){
 var _curry2 = require('./internal/_curry2');
-var _slice = require('./internal/_slice');
+var _curryN = require('./internal/_curryN');
 var arity = require('./arity');
 
 
@@ -8057,37 +7729,10 @@ var arity = require('./arity');
  *      g(4); //=> 10
  */
 module.exports = _curry2(function curryN(length, fn) {
-  return arity(length, function() {
-    var n = arguments.length;
-    var shortfall = length - n;
-    var idx = n;
-    while (--idx >= 0) {
-      if (arguments[idx] === __) {
-        shortfall += 1;
-      }
-    }
-    if (shortfall <= 0) {
-      return fn.apply(this, arguments);
-    } else {
-      var initialArgs = _slice(arguments);
-      return curryN(shortfall, function() {
-        var currentArgs = _slice(arguments);
-        var combinedArgs = [];
-        var idx = -1;
-        while (++idx < n) {
-          var val = initialArgs[idx];
-          combinedArgs[idx] = (val === __ ? currentArgs.shift() : val);
-        }
-        return fn.apply(this, combinedArgs.concat(currentArgs));
-      });
-    }
-  });
+  return arity(length, _curryN(length, [], fn));
 });
 
-},{"./__":4,"./arity":5,"./internal/_curry2":8,"./internal/_slice":9}],7:[function(require,module,exports){
-var __ = require('../__');
-
-
+},{"./arity":8,"./internal/_curry2":11,"./internal/_curryN":12}],10:[function(require,module,exports){
 /**
  * Optimized internal two-arity curry function.
  *
@@ -8100,7 +7745,7 @@ module.exports = function _curry1(fn) {
   return function f1(a) {
     if (arguments.length === 0) {
       return f1;
-    } else if (a === __) {
+    } else if (a != null && a['@@functional/placeholder'] === true) {
       return f1;
     } else {
       return fn(a);
@@ -8108,8 +7753,7 @@ module.exports = function _curry1(fn) {
   };
 };
 
-},{"../__":4}],8:[function(require,module,exports){
-var __ = require('../__');
+},{}],11:[function(require,module,exports){
 var _curry1 = require('./_curry1');
 
 
@@ -8126,15 +7770,16 @@ module.exports = function _curry2(fn) {
     var n = arguments.length;
     if (n === 0) {
       return f2;
-    } else if (n === 1 && a === __) {
+    } else if (n === 1 && a != null && a['@@functional/placeholder'] === true) {
       return f2;
     } else if (n === 1) {
       return _curry1(function(b) { return fn(a, b); });
-    } else if (n === 2 && a === __ && b === __) {
+    } else if (n === 2 && a != null && a['@@functional/placeholder'] === true &&
+                          b != null && b['@@functional/placeholder'] === true) {
       return f2;
-    } else if (n === 2 && a === __) {
+    } else if (n === 2 && a != null && a['@@functional/placeholder'] === true) {
       return _curry1(function(a) { return fn(a, b); });
-    } else if (n === 2 && b === __) {
+    } else if (n === 2 && b != null && b['@@functional/placeholder'] === true) {
       return _curry1(function(b) { return fn(a, b); });
     } else {
       return fn(a, b);
@@ -8142,417 +7787,47 @@ module.exports = function _curry2(fn) {
   };
 };
 
-},{"../__":4,"./_curry1":7}],9:[function(require,module,exports){
+},{"./_curry1":10}],12:[function(require,module,exports){
+var arity = require('../arity');
+
+
 /**
- * An optimized, private array `slice` implementation.
+ * Internal curryN function.
  *
  * @private
- * @param {Arguments|Array} args The array or arguments object to consider.
- * @param {Number} [from=0] The array index to slice from, inclusive.
- * @param {Number} [to=args.length] The array index to slice to, exclusive.
- * @return {Array} A new, sliced array.
- * @example
- *
- *      _slice([1, 2, 3, 4, 5], 1, 3); //=> [2, 3]
- *
- *      var firstThreeArgs = function(a, b, c, d) {
- *        return _slice(arguments, 0, 3);
- *      };
- *      firstThreeArgs(1, 2, 3, 4); //=> [1, 2, 3]
+ * @category Function
+ * @param {Number} length The arity of the curried function.
+ * @return {array} An array of arguments received thus far.
+ * @param {Function} fn The function to curry.
  */
-module.exports = function _slice(args, from, to) {
-  switch (arguments.length) {
-    case 1: return _slice(args, 0, args.length);
-    case 2: return _slice(args, from, args.length);
-    default:
-      var list = [];
-      var idx = -1;
-      var len = Math.max(0, Math.min(args.length, to) - from);
-      while (++idx < len) {
-        list[idx] = args[from + idx];
-      }
-      return list;
-  }
-};
-
-},{}],10:[function(require,module,exports){
-var VNode = require('./vnode');
-var is = require('./is');
-
-module.exports = function h(sel, b, c) {
-  var data = {}, children, text, i;
-  if (arguments.length === 3) {
-    data = b;
-    if (is.array(c)) { children = c; }
-    else if (is.primitive(c)) { text = c; }
-  } else if (arguments.length === 2) {
-    if (is.array(b)) { children = b; }
-    else if (is.primitive(b)) { text = b; }
-    else { data = b; }
-  }
-  if (is.array(children)) {
-    for (i = 0; i < children.length; ++i) {
-      if (is.primitive(children[i])) children[i] = VNode(undefined, undefined, undefined, children[i]);
-    }
-  }
-  return VNode(sel, data, children, text, undefined);
-};
-
-},{"./is":11,"./vnode":17}],11:[function(require,module,exports){
-module.exports = {
-  array: Array.isArray,
-  primitive: function(s) { return typeof s === 'string' || typeof s === 'number'; },
-};
-
-},{}],12:[function(require,module,exports){
-function updateClass(oldVnode, vnode) {
-  var cur, name, elm = vnode.elm,
-      oldClass = oldVnode.data.class || {},
-      klass = vnode.data.class || {};
-  for (name in klass) {
-    cur = klass[name];
-    if (cur !== oldClass[name]) {
-      elm.classList[cur ? 'add' : 'remove'](name);
-    }
-  }
-}
-
-module.exports = {create: updateClass, update: updateClass};
-
-},{}],13:[function(require,module,exports){
-var is = require('../is');
-
-function arrInvoker(arr) {
-  return function() { arr[0](arr[1]); };
-}
-
-function updateEventListeners(oldVnode, vnode) {
-  var name, cur, old, elm = vnode.elm,
-      oldOn = oldVnode.data.on || {}, on = vnode.data.on;
-  if (!on) return;
-  for (name in on) {
-    cur = on[name];
-    old = oldOn[name];
-    if (old === undefined) {
-      elm.addEventListener(name, is.array(cur) ? arrInvoker(cur) : cur);
-    } else if (is.array(old)) {
-      old[0] = cur[0]; // Deliberately modify old array since it's
-      old[1] = cur[1]; // captured in closure created with `arrInvoker`
-      on[name]  = old;
-    }
-  }
-}
-
-module.exports = {create: updateEventListeners, update: updateEventListeners};
-
-},{"../is":11}],14:[function(require,module,exports){
-function updateProps(oldVnode, vnode) {
-  var key, cur, old, elm = vnode.elm,
-      oldProps = oldVnode.data.props || {}, props = vnode.data.props || {};
-  for (key in props) {
-    cur = props[key];
-    old = oldProps[key];
-    if (old !== cur) {
-      elm[key] = cur;
-    }
-  }
-}
-
-module.exports = {create: updateProps, update: updateProps};
-
-},{}],15:[function(require,module,exports){
-var raf = requestAnimationFrame || setTimeout;
-var nextFrame = function(fn) { raf(function() { raf(fn); }); };
-
-function setNextFrame(obj, prop, val) {
-  nextFrame(function() { obj[prop] = val; });
-}
-
-function updateStyle(oldVnode, vnode) {
-  var cur, name, elm = vnode.elm,
-      oldStyle = oldVnode.data.style || {},
-      style = vnode.data.style || {},
-      oldHasDel = 'delayed' in oldStyle;
-  for (name in style) {
-    cur = style[name];
-    if (name === 'delayed') {
-      for (name in style.delayed) {
-        cur = style.delayed[name];
-        if (!oldHasDel || cur !== oldStyle.delayed[name]) {
-          setNextFrame(elm.style, name, cur);
-        }
-      }
-    } else if (name !== 'remove' && cur !== oldStyle[name]) {
-      elm.style[name] = cur;
-    }
-  }
-}
-
-function applyDestroyStyle(vnode) {
-  var style, name, elm = vnode.elm, s = vnode.data.style;
-  if (!s || !(style = s.destroy)) return;
-  for (name in style) {
-    elm.style[name] = style[name];
-  }
-}
-
-function applyRemoveStyle(vnode, rm) {
-  var s = vnode.data.style;
-  if (!s || !s.remove) {
-    rm();
-    return;
-  }
-  var name, elm = vnode.elm, idx, i = 0, maxDur = 0,
-      compStyle, style = s.remove, amount = 0;
-  var applied = [];
-  for (name in style) {
-    applied.push(name);
-    elm.style[name] = style[name];
-  }
-  compStyle = getComputedStyle(elm);
-  var props = compStyle['transition-property'].split(', ');
-  for (; i < props.length; ++i) {
-    if(applied.indexOf(props[i]) !== -1) amount++;
-  }
-  elm.addEventListener('transitionend', function(ev) {
-    if (ev.target === elm) --amount;
-    if (amount === 0) rm();
-  });
-}
-
-module.exports = {create: updateStyle, update: updateStyle, destroy: applyDestroyStyle, remove: applyRemoveStyle};
-
-},{}],16:[function(require,module,exports){
-// jshint newcap: false
-'use strict';
-
-var VNode = require('./vnode');
-var is = require('./is');
-
-function isUndef(s) { return s === undefined; }
-
-function emptyNodeAt(elm) {
-  return VNode(elm.tagName, {}, [], undefined, elm);
-}
-
-var emptyNode = VNode('', {}, [], undefined, undefined);
-
-var insertedVnodeQueue;
-
-function sameVnode(vnode1, vnode2) {
-  return vnode1.key === vnode2.key && vnode1.sel === vnode2.sel;
-}
-
-function createKeyToOldIdx(children, beginIdx, endIdx) {
-  var i, map = {}, key;
-  for (i = beginIdx; i <= endIdx; ++i) {
-    key = children[i].key;
-    if (!isUndef(key)) map[key] = i;
-  }
-  return map;
-}
-
-function createRmCb(parentElm, childElm, listeners) {
+module.exports = function _curryN(length, received, fn) {
   return function() {
-    if (--listeners === 0) parentElm.removeChild(childElm);
-  };
-}
-
-var hooks = ['create', 'update', 'remove', 'destroy', 'pre', 'post'];
-
-function init(modules) {
-  var i, j, cbs = {};
-  for (i = 0; i < hooks.length; ++i) {
-    cbs[hooks[i]] = [];
-    for (j = 0; j < modules.length; ++j) {
-      if (modules[j][hooks[i]] !== undefined) cbs[hooks[i]].push(modules[j][hooks[i]]);
-    }
-  }
-
-  function createElm(vnode) {
-    var i;
-    if (!isUndef(i = vnode.data) && !isUndef(i = i.hook) && !isUndef(i = i.init)) {
-      i(vnode);
-    }
-    if (!isUndef(i = vnode.data) && !isUndef(i = i.vnode)) vnode = i;
-    var elm, children = vnode.children, sel = vnode.sel;
-    if (!isUndef(sel)) {
-      // Parse selector
-      var hashIdx = sel.indexOf('#');
-      var dotIdx = sel.indexOf('.', hashIdx);
-      var hash = hashIdx > 0 ? hashIdx : sel.length;
-      var dot = dotIdx > 0 ? dotIdx : sel.length;
-      var tag = hashIdx !== -1 || dotIdx !== -1 ? sel.slice(0, Math.min(hash, dot)) : sel;
-      elm = vnode.elm = document.createElement(tag);
-      if (hash < dot) elm.id = sel.slice(hash + 1, dot);
-      if (dotIdx > 0) elm.className = sel.slice(dot+1).replace(/\./g, ' ');
-      if (is.array(children)) {
-        for (i = 0; i < children.length; ++i) {
-          elm.appendChild(createElm(children[i]));
-        }
-      } else if (is.primitive(vnode.text)) {
-        elm.appendChild(document.createTextNode(vnode.text));
-      }
-      for (i = 0; i < cbs.create.length; ++i) cbs.create[i](emptyNode, vnode);
-      i = vnode.data.hook; // Reuse variable
-      if (!isUndef(i)) {
-        if (i.create) i.create(vnode);
-        if (i.insert) insertedVnodeQueue.push(vnode);
-      }
-    } else {
-      elm = vnode.elm = document.createTextNode(vnode.text);
-    }
-    return elm;
-  }
-
-  function addVnodes(parentElm, before, vnodes, startIdx, endIdx) {
-    if (isUndef(before)) {
-      for (; startIdx <= endIdx; ++startIdx) {
-        parentElm.appendChild(createElm(vnodes[startIdx]));
-      }
-    } else {
-      var elm = before.elm;
-      for (; startIdx <= endIdx; ++startIdx) {
-        parentElm.insertBefore(createElm(vnodes[startIdx]), elm);
-      }
-    }
-  }
-
-  function invokeDestroyHook(vnode) {
-    var i = vnode.data, j;
-    if (!isUndef(i) && !isUndef(i = i.hook) && !isUndef(i = i.destroy)) i(vnode);
-    for (i = 0; i < cbs.destroy.length; ++i) cbs.destroy[i](vnode);
-    if (!isUndef(i = vnode.children)) {
-      for (j = 0; j < vnode.children.length; ++j) {
-        invokeDestroyHook(vnode.children[j]);
-      }
-    }
-  }
-
-  function removeVnodes(parentElm, vnodes, startIdx, endIdx) {
-    for (; startIdx <= endIdx; ++startIdx) {
-      var i, listeners, rm, ch = vnodes[startIdx];
-      if (!isUndef(ch)) {
-        listeners = cbs.remove.length + 1;
-        rm = createRmCb(parentElm, ch.elm, listeners);
-        for (i = 0; i < cbs.remove.length; ++i) cbs.remove[i](ch, rm);
-        invokeDestroyHook(ch);
-        if (!isUndef(i = ch.data) && !isUndef(i = i.hook) && !isUndef(i = i.remove)) {
-          i(ch, rm);
-        } else {
-          rm();
-        }
-      }
-    }
-  }
-
-  function updateChildren(parentElm, oldCh, newCh) {
-    var oldStartIdx = 0, newStartIdx = 0;
-    var oldEndIdx = oldCh.length - 1;
-    var oldStartVnode = oldCh[0];
-    var oldEndVnode = oldCh[oldEndIdx];
-    var newEndIdx = newCh.length - 1;
-    var newStartVnode = newCh[0];
-    var newEndVnode = newCh[newEndIdx];
-    var oldKeyToIdx, idxInOld, elmToMove;
-
-    while (oldStartIdx <= oldEndIdx && newStartIdx <= newEndIdx) {
-      if (isUndef(oldStartVnode)) {
-        oldStartVnode = oldCh[++oldStartIdx]; // Vnode has been moved left
-      } else if (isUndef(oldEndVnode)) {
-        oldEndVnode = oldCh[--oldEndIdx];
-      } else if (sameVnode(oldStartVnode, newStartVnode)) {
-        patchVnode(oldStartVnode, newStartVnode);
-        oldStartVnode = oldCh[++oldStartIdx];
-        newStartVnode = newCh[++newStartIdx];
-      } else if (sameVnode(oldEndVnode, newEndVnode)) {
-        patchVnode(oldEndVnode, newEndVnode);
-        oldEndVnode = oldCh[--oldEndIdx];
-        newEndVnode = newCh[--newEndIdx];
-      } else if (sameVnode(oldStartVnode, newEndVnode)) { // Vnode moved right
-        patchVnode(oldStartVnode, newEndVnode);
-        parentElm.insertBefore(oldStartVnode.elm, oldEndVnode.elm.nextSibling);
-        oldStartVnode = oldCh[++oldStartIdx];
-        newEndVnode = newCh[--newEndIdx];
-      } else if (sameVnode(oldEndVnode, newStartVnode)) { // Vnode moved left
-        patchVnode(oldEndVnode, newStartVnode);
-        parentElm.insertBefore(oldEndVnode.elm, oldStartVnode.elm);
-        oldEndVnode = oldCh[--oldEndIdx];
-        newStartVnode = newCh[++newStartIdx];
+    var combined = [];
+    var argsIdx = 0;
+    var left = length;
+    var combinedIdx = 0;
+    while (combinedIdx < received.length || argsIdx < arguments.length) {
+      var result;
+      if (combinedIdx < received.length &&
+          (received[combinedIdx] == null ||
+           received[combinedIdx]['@@functional/placeholder'] !== true ||
+           argsIdx >= arguments.length)) {
+        result = received[combinedIdx];
       } else {
-        if (isUndef(oldKeyToIdx)) oldKeyToIdx = createKeyToOldIdx(oldCh, oldStartIdx, oldEndIdx);
-        idxInOld = oldKeyToIdx[newStartVnode.key];
-        if (isUndef(idxInOld)) { // New element
-          parentElm.insertBefore(createElm(newStartVnode), oldStartVnode.elm);
-          newStartVnode = newCh[++newStartIdx];
-        } else {
-          elmToMove = oldCh[idxInOld];
-          patchVnode(elmToMove, newStartVnode);
-          oldCh[idxInOld] = undefined;
-          parentElm.insertBefore(elmToMove.elm, oldStartVnode.elm);
-          newStartVnode = newCh[++newStartIdx];
-        }
+        result = arguments[argsIdx];
+        argsIdx += 1;
       }
-    }
-    if (oldStartIdx > oldEndIdx) addVnodes(parentElm, oldStartVnode, newCh, newStartIdx, newEndIdx);
-    else if (newStartIdx > newEndIdx) removeVnodes(parentElm, oldCh, oldStartIdx, oldEndIdx);
-  }
-
-  function patchVnode(oldVnode, vnode) {
-    var i;
-    if (!isUndef(i = vnode.data) && !isUndef(i = i.hook) && !isUndef(i = i.patch)) {
-      i = i(oldVnode, vnode);
-    }
-    if (!isUndef(i = oldVnode.data) && !isUndef(i = i.vnode)) oldVnode = i;
-    if (!isUndef(i = vnode.data) && !isUndef(i = i.vnode)) vnode = i;
-    var elm = vnode.elm = oldVnode.elm, oldCh = oldVnode.children, ch = vnode.children;
-    if (oldVnode === vnode) return;
-    if (!isUndef(vnode.data)) {
-      for (i = 0; i < cbs.update.length; ++i) cbs.update[i](oldVnode, vnode);
-      i = vnode.data.hook;
-      if (!isUndef(i) && !isUndef(i = i.update)) i(vnode);
-    }
-    if (isUndef(vnode.text)) {
-      if (!isUndef(oldCh) && !isUndef(ch)) {
-        if (oldCh !== ch) updateChildren(elm, oldCh, ch);
-      } else if (!isUndef(ch)) {
-        addVnodes(elm, undefined, ch, 0, ch.length - 1);
-      } else if (!isUndef(oldCh)) {
-        removeVnodes(elm, oldCh, 0, oldCh.length - 1);
+      combined[combinedIdx] = result;
+      if (result == null || result['@@functional/placeholder'] !== true) {
+        left -= 1;
       }
-    } else if (oldVnode.text !== vnode.text) {
-      elm.childNodes[0].nodeValue = vnode.text;
+      combinedIdx += 1;
     }
-    return vnode;
-  }
-
-  return function(oldVnode, vnode) {
-    var i;
-    insertedVnodeQueue = [];
-    if (oldVnode instanceof Element) {
-      oldVnode = emptyNodeAt(oldVnode);
-    }
-    for (i = 0; i < cbs.pre.length; ++i) cbs.pre[i]();
-    patchVnode(oldVnode, vnode);
-    for (i = 0; i < insertedVnodeQueue.length; ++i) {
-      insertedVnodeQueue[i].data.hook.insert(insertedVnodeQueue[i]);
-    }
-    insertedVnodeQueue = undefined;
-    for (i = 0; i < cbs.post.length; ++i) cbs.post[i]();
-    return vnode;
+    return left <= 0 ? fn.apply(this, combined) : arity(left, _curryN(length, combined, fn));
   };
-}
-
-module.exports = {init: init};
-
-},{"./is":11,"./vnode":17}],17:[function(require,module,exports){
-module.exports = function(sel, data, children, text, elm) {
-  var key = data === undefined ? undefined : data.key;
-  return {sel: sel, data: data, children: children,
-          text: text, elm: elm, key: key};
 };
 
-},{}],18:[function(require,module,exports){
+},{"../arity":8}],13:[function(require,module,exports){
 var curryN = require('ramda/src/curryN');
 
 function isString(s) { return typeof s === 'string'; }
@@ -8622,4 +7897,858 @@ function Type(desc) {
 
 module.exports = Type;
 
-},{"ramda/src/curryN":6}]},{},[1]);
+},{"ramda/src/curryN":9}],14:[function(require,module,exports){
+var curryN = require('ramda/src/curryN');
+
+'use strict';
+
+function isFunction(obj) {
+  return !!(obj && obj.constructor && obj.call && obj.apply);
+}
+
+// Globals
+var toUpdate = [];
+var inStream;
+
+// Library functions use self callback to accept (null, undefined) update triggers.
+function map(f, s) {
+  return combine(function(s, self) { self(f(s.val)); }, [s]);
+}
+
+function on(f, s) {
+  return combine(function(s) { f(s.val); }, [s]);
+}
+
+function boundMap(f) { return map(f, this); }
+
+var scan = curryN(3, function(f, acc, s) {
+  var ns = combine(function(s, self) {
+    self(acc = f(acc, s.val));
+  }, [s]);
+  if (!ns.hasVal) ns(acc);
+  return ns;
+});
+
+var merge = curryN(2, function(s1, s2) {
+  var s = immediate(combine(function(s1, s2, self, changed) {
+    if (changed[0]) {
+      self(changed[0]());
+    } else if (s1.hasVal) {
+      self(s1.val);
+    } else if (s2.hasVal) {
+      self(s2.val);
+    }
+  }, [s1, s2]));
+  endsOn(combine(function() {
+    return true;
+  }, [s1.end, s2.end]), s);
+  return s;
+});
+
+function ap(s2) {
+  var s1 = this;
+  return combine(function(s1, s2, self) { self(s1.val(s2.val)); }, [s1, s2]);
+}
+
+function initialDepsNotMet(stream) {
+  stream.depsMet = stream.deps.every(function(s) {
+    return s.hasVal;
+  });
+  return !stream.depsMet;
+}
+
+function updateStream(s) {
+  if ((s.depsMet !== true && initialDepsNotMet(s)) ||
+      (s.end !== undefined && s.end.val === true)) return;
+  if (inStream !== undefined) {
+    toUpdate.push(s);
+    return;
+  }
+  inStream = s;
+  if (s.depsChanged) s.fnArgs[s.fnArgs.length - 1] = s.depsChanged;
+  var returnVal = s.fn.apply(s.fn, s.fnArgs);
+  if (returnVal !== undefined) {
+    s(returnVal);
+  }
+  inStream = undefined;
+  if (s.depsChanged !== undefined) s.depsChanged = [];
+  s.shouldUpdate = false;
+  if (flushing === false) flushUpdate();
+}
+
+var order = [];
+var orderNextIdx = -1;
+
+function findDeps(s) {
+  var i, listeners = s.listeners;
+  if (s.queued === false) {
+    s.queued = true;
+    for (i = 0; i < listeners.length; ++i) {
+      findDeps(listeners[i]);
+    }
+    order[++orderNextIdx] = s;
+  }
+}
+
+function updateDeps(s) {
+  var i, o, list, listeners = s.listeners;
+  for (i = 0; i < listeners.length; ++i) {
+    list = listeners[i];
+    if (list.end === s) {
+      endStream(list);
+    } else {
+      if (list.depsChanged !== undefined) list.depsChanged.push(s);
+      list.shouldUpdate = true;
+      findDeps(list);
+    }
+  }
+  for (; orderNextIdx >= 0; --orderNextIdx) {
+    o = order[orderNextIdx];
+    if (o.shouldUpdate === true) updateStream(o);
+    o.queued = false;
+  }
+}
+
+var flushing = false;
+
+function flushUpdate() {
+  flushing = true;
+  while (toUpdate.length > 0) {
+    var s = toUpdate.shift();
+    if (s.vals.length > 0) s.val = s.vals.shift();
+    updateDeps(s);
+  }
+  flushing = false;
+}
+
+function isStream(stream) {
+  return isFunction(stream) && 'hasVal' in stream;
+}
+
+function streamToString() {
+  return 'stream(' + this.val + ')';
+}
+
+function updateStreamValue(s, n) {
+  if (n !== undefined && n !== null && isFunction(n.then)) {
+    n.then(s);
+    return;
+  }
+  s.val = n;
+  s.hasVal = true;
+  if (inStream === undefined) {
+    flushing = true;
+    updateDeps(s);
+    if (toUpdate.length > 0) flushUpdate(); else flushing = false;
+  } else if (inStream === s) {
+    markListeners(s, s.listeners);
+  } else {
+    s.vals.push(n);
+    toUpdate.push(s);
+  }
+}
+
+function markListeners(s, lists) {
+  var i, list;
+  for (i = 0; i < lists.length; ++i) {
+    list = lists[i];
+    if (list.end !== s) {
+      if (list.depsChanged !== undefined) {
+        list.depsChanged.push(s);
+      }
+      list.shouldUpdate = true;
+    } else {
+      endStream(list);
+    }
+  }
+}
+
+function createStream() {
+  function s(n) {
+    return arguments.length > 0 ? (updateStreamValue(s, n), s)
+                                : s.val;
+  }
+  s.hasVal = false;
+  s.val = undefined;
+  s.vals = [];
+  s.listeners = [];
+  s.queued = false;
+  s.end = undefined;
+
+  s.map = boundMap;
+  s.ap = ap;
+  s.of = stream;
+  s.toString = streamToString;
+
+  return s;
+}
+
+function addListeners(deps, s) {
+  for (var i = 0; i < deps.length; ++i) {
+    deps[i].listeners.push(s);
+  }
+}
+
+function createDependentStream(deps, fn) {
+  var s = createStream();
+  s.fn = fn;
+  s.deps = deps;
+  s.depsMet = false;
+  s.depsChanged = deps.length > 0 ? [] : undefined;
+  s.shouldUpdate = false;
+  addListeners(deps, s);
+  return s;
+}
+
+function immediate(s) {
+  if (s.depsMet === false) {
+    s.depsMet = true;
+    updateStream(s);
+  }
+  return s;
+}
+
+function removeListener(s, listeners) {
+  var idx = listeners.indexOf(s);
+  listeners[idx] = listeners[listeners.length - 1];
+  listeners.length--;
+}
+
+function detachDeps(s) {
+  for (var i = 0; i < s.deps.length; ++i) {
+    removeListener(s, s.deps[i].listeners);
+  }
+  s.deps.length = 0;
+}
+
+function endStream(s) {
+  if (s.deps !== undefined) detachDeps(s);
+  if (s.end !== undefined) detachDeps(s.end);
+}
+
+function endsOn(endS, s) {
+  detachDeps(s.end);
+  endS.listeners.push(s.end);
+  s.end.deps.push(endS);
+  return s;
+}
+
+function trueFn() { return true; }
+
+function stream(initialValue) {
+  var endStream = createDependentStream([], trueFn);
+  var s = createStream();
+  s.end = endStream;
+  s.fnArgs = [];
+  endStream.listeners.push(s);
+  if (arguments.length > 0) s(initialValue);
+  return s;
+}
+
+function combine(fn, streams) {
+  var i, s, deps, depEndStreams;
+  var endStream = createDependentStream([], trueFn);
+  deps = []; depEndStreams = [];
+  for (i = 0; i < streams.length; ++i) {
+    if (streams[i] !== undefined) {
+      deps.push(streams[i]);
+      if (streams[i].end !== undefined) depEndStreams.push(streams[i].end);
+    }
+  }
+  s = createDependentStream(deps, fn);
+  s.depsChanged = [];
+  s.fnArgs = s.deps.concat([s, s.depsChanged]);
+  s.end = endStream;
+  endStream.listeners.push(s);
+  addListeners(depEndStreams, endStream);
+  endStream.deps = depEndStreams;
+  updateStream(s);
+  return s;
+}
+
+var transduce = curryN(2, function(xform, source) {
+  xform = xform(new StreamTransformer());
+  return combine(function(source, self) {
+    var res = xform['@@transducer/step'](undefined, source.val);
+    if (res && res['@@transducer/reduced'] === true) {
+      self.end(true);
+      return res['@@transducer/value'];
+    } else {
+      return res;
+    }
+  }, [source]);
+});
+
+function StreamTransformer() { }
+StreamTransformer.prototype['@@transducer/init'] = function() { };
+StreamTransformer.prototype['@@transducer/result'] = function() { };
+StreamTransformer.prototype['@@transducer/step'] = function(s, v) { return v; };
+
+module.exports = {
+  stream: stream,
+  combine: curryN(2, combine),
+  isStream: isStream,
+  transduce: transduce,
+  merge: merge,
+  scan: scan,
+  endsOn: endsOn,
+  map: curryN(2, map),
+  on: curryN(2, on),
+  curryN: curryN,
+  immediate: immediate,
+};
+
+},{"ramda/src/curryN":15}],15:[function(require,module,exports){
+var _arity = require('./internal/_arity');
+var _curry1 = require('./internal/_curry1');
+var _curry2 = require('./internal/_curry2');
+var _curryN = require('./internal/_curryN');
+
+
+/**
+ * Returns a curried equivalent of the provided function, with the
+ * specified arity. The curried function has two unusual capabilities.
+ * First, its arguments needn't be provided one at a time. If `g` is
+ * `R.curryN(3, f)`, the following are equivalent:
+ *
+ *   - `g(1)(2)(3)`
+ *   - `g(1)(2, 3)`
+ *   - `g(1, 2)(3)`
+ *   - `g(1, 2, 3)`
+ *
+ * Secondly, the special placeholder value `R.__` may be used to specify
+ * "gaps", allowing partial application of any combination of arguments,
+ * regardless of their positions. If `g` is as above and `_` is `R.__`,
+ * the following are equivalent:
+ *
+ *   - `g(1, 2, 3)`
+ *   - `g(_, 2, 3)(1)`
+ *   - `g(_, _, 3)(1)(2)`
+ *   - `g(_, _, 3)(1, 2)`
+ *   - `g(_, 2)(1)(3)`
+ *   - `g(_, 2)(1, 3)`
+ *   - `g(_, 2)(_, 3)(1)`
+ *
+ * @func
+ * @memberOf R
+ * @category Function
+ * @sig Number -> (* -> a) -> (* -> a)
+ * @param {Number} length The arity for the returned function.
+ * @param {Function} fn The function to curry.
+ * @return {Function} A new, curried function.
+ * @see R.curry
+ * @example
+ *
+ *      var addFourNumbers = function() {
+ *        return R.sum([].slice.call(arguments, 0, 4));
+ *      };
+ *
+ *      var curriedAddFourNumbers = R.curryN(4, addFourNumbers);
+ *      var f = curriedAddFourNumbers(1, 2);
+ *      var g = f(3);
+ *      g(4); //=> 10
+ */
+module.exports = _curry2(function curryN(length, fn) {
+  if (length === 1) {
+    return _curry1(fn);
+  }
+  return _arity(length, _curryN(length, [], fn));
+});
+
+},{"./internal/_arity":16,"./internal/_curry1":17,"./internal/_curry2":18,"./internal/_curryN":19}],16:[function(require,module,exports){
+module.exports = function _arity(n, fn) {
+  // jshint unused:vars
+  switch (n) {
+    case 0: return function() { return fn.apply(this, arguments); };
+    case 1: return function(a0) { return fn.apply(this, arguments); };
+    case 2: return function(a0, a1) { return fn.apply(this, arguments); };
+    case 3: return function(a0, a1, a2) { return fn.apply(this, arguments); };
+    case 4: return function(a0, a1, a2, a3) { return fn.apply(this, arguments); };
+    case 5: return function(a0, a1, a2, a3, a4) { return fn.apply(this, arguments); };
+    case 6: return function(a0, a1, a2, a3, a4, a5) { return fn.apply(this, arguments); };
+    case 7: return function(a0, a1, a2, a3, a4, a5, a6) { return fn.apply(this, arguments); };
+    case 8: return function(a0, a1, a2, a3, a4, a5, a6, a7) { return fn.apply(this, arguments); };
+    case 9: return function(a0, a1, a2, a3, a4, a5, a6, a7, a8) { return fn.apply(this, arguments); };
+    case 10: return function(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) { return fn.apply(this, arguments); };
+    default: throw new Error('First argument to _arity must be a non-negative integer no greater than ten');
+  }
+};
+
+},{}],17:[function(require,module,exports){
+/**
+ * Optimized internal two-arity curry function.
+ *
+ * @private
+ * @category Function
+ * @param {Function} fn The function to curry.
+ * @return {Function} The curried function.
+ */
+module.exports = function _curry1(fn) {
+  return function f1(a) {
+    if (arguments.length === 0) {
+      return f1;
+    } else if (a != null && a['@@functional/placeholder'] === true) {
+      return f1;
+    } else {
+      return fn.apply(this, arguments);
+    }
+  };
+};
+
+},{}],18:[function(require,module,exports){
+arguments[4][11][0].apply(exports,arguments)
+},{"./_curry1":17,"dup":11}],19:[function(require,module,exports){
+var _arity = require('./_arity');
+
+
+/**
+ * Internal curryN function.
+ *
+ * @private
+ * @category Function
+ * @param {Number} length The arity of the curried function.
+ * @return {array} An array of arguments received thus far.
+ * @param {Function} fn The function to curry.
+ */
+module.exports = function _curryN(length, received, fn) {
+  return function() {
+    var combined = [];
+    var argsIdx = 0;
+    var left = length;
+    var combinedIdx = 0;
+    while (combinedIdx < received.length || argsIdx < arguments.length) {
+      var result;
+      if (combinedIdx < received.length &&
+          (received[combinedIdx] == null ||
+           received[combinedIdx]['@@functional/placeholder'] !== true ||
+           argsIdx >= arguments.length)) {
+        result = received[combinedIdx];
+      } else {
+        result = arguments[argsIdx];
+        argsIdx += 1;
+      }
+      combined[combinedIdx] = result;
+      if (result == null || result['@@functional/placeholder'] !== true) {
+        left -= 1;
+      }
+      combinedIdx += 1;
+    }
+    return left <= 0 ? fn.apply(this, combined) : _arity(left, _curryN(length, combined, fn));
+  };
+};
+
+},{"./_arity":16}],20:[function(require,module,exports){
+arguments[4][6][0].apply(exports,arguments)
+},{"dup":6}],21:[function(require,module,exports){
+var booleanAttrs = ["allowfullscreen", "async", "autofocus", "autoplay", "checked", "compact", "controls", "declare", 
+                "default", "defaultchecked", "defaultmuted", "defaultselected", "defer", "disabled", "draggable", 
+                "enabled", "formnovalidate", "hidden", "indeterminate", "inert", "ismap", "itemscope", "loop", "multiple", 
+                "muted", "nohref", "noresize", "noshade", "novalidate", "nowrap", "open", "pauseonexit", "readonly", 
+                "required", "reversed", "scoped", "seamless", "selected", "sortable", "spellcheck", "translate", 
+                "truespeed", "typemustmatch", "visible"];
+    
+var booleanAttrsDict = {};
+for(var i=0, len = booleanAttrs.length; i < len; i++) {
+  booleanAttrsDict[booleanAttrs[i]] = true;
+}
+    
+function updateAttrs(oldVnode, vnode) {
+  var key, cur, old, elm = vnode.elm,
+      oldAttrs = oldVnode.data.attrs || {}, attrs = vnode.data.attrs || {};
+  
+  // update modified attributes, add new attributes
+  for (key in attrs) {
+    cur = attrs[key];
+    old = oldAttrs[key];
+    if (old !== cur) {
+      // TODO: add support to namespaced attributes (setAttributeNS)
+      if(!cur && booleanAttrsDict[key])
+        elm.removeAttribute(key);
+      else
+        elm.setAttribute(key, cur);
+    }
+  }
+  //remove removed attributes
+  // use `in` operator since the previous `for` iteration uses it (.i.e. add even attributes with undefined value)
+  // the other option is to remove all attributes with value == undefined
+  for (key in oldAttrs) {
+    if (!(key in attrs)) {
+      elm.removeAttribute(key);
+    }
+  }
+}
+
+module.exports = {create: updateAttrs, update: updateAttrs};
+
+},{}],22:[function(require,module,exports){
+function updateClass(oldVnode, vnode) {
+  var cur, name, elm = vnode.elm,
+      oldClass = oldVnode.data.class || {},
+      klass = vnode.data.class || {};
+  for (name in klass) {
+    cur = klass[name];
+    if (cur !== oldClass[name]) {
+      elm.classList[cur ? 'add' : 'remove'](name);
+    }
+  }
+}
+
+module.exports = {create: updateClass, update: updateClass};
+
+},{}],23:[function(require,module,exports){
+var is = require('../is');
+
+function arrInvoker(arr) {
+  return function() {
+    // Special case when length is two, for performance
+    arr.length === 2 ? arr[0](arr[1]) : arr[0].apply(undefined, arr.slice(1));
+  };
+}
+
+function fnInvoker(o) {
+  return function(ev) { o.fn(ev); };
+}
+
+function updateEventListeners(oldVnode, vnode) {
+  var name, cur, old, elm = vnode.elm,
+      oldOn = oldVnode.data.on || {}, on = vnode.data.on;
+  if (!on) return;
+  for (name in on) {
+    cur = on[name];
+    old = oldOn[name];
+    if (old === undefined) {
+      if (is.array(cur)) {
+        elm.addEventListener(name, arrInvoker(cur));
+      } else {
+        cur = {fn: cur};
+        on[name] = cur;
+        elm.addEventListener(name, fnInvoker(cur));
+      }
+    } else if (is.array(old)) {
+      // Deliberately modify old array since it's captured in closure created with `arrInvoker`
+      old.length = cur.length;
+      for (var i = 0; i < old.length; ++i) old[i] = cur[i];
+      on[name]  = old;
+    } else {
+      old.fn = cur;
+      on[name] = old;
+    }
+  }
+}
+
+module.exports = {create: updateEventListeners, update: updateEventListeners};
+
+},{"../is":20}],24:[function(require,module,exports){
+function updateProps(oldVnode, vnode) {
+  var key, cur, old, elm = vnode.elm,
+      oldProps = oldVnode.data.props || {}, props = vnode.data.props || {};
+  for (key in props) {
+    cur = props[key];
+    old = oldProps[key];
+    if (old !== cur) {
+      elm[key] = cur;
+    }
+  }
+}
+
+module.exports = {create: updateProps, update: updateProps};
+
+},{}],25:[function(require,module,exports){
+var raf = requestAnimationFrame || setTimeout;
+var nextFrame = function(fn) { raf(function() { raf(fn); }); };
+
+function setNextFrame(obj, prop, val) {
+  nextFrame(function() { obj[prop] = val; });
+}
+
+function updateStyle(oldVnode, vnode) {
+  var cur, name, elm = vnode.elm,
+      oldStyle = oldVnode.data.style || {},
+      style = vnode.data.style || {},
+      oldHasDel = 'delayed' in oldStyle;
+  for (name in style) {
+    cur = style[name];
+    if (name === 'delayed') {
+      for (name in style.delayed) {
+        cur = style.delayed[name];
+        if (!oldHasDel || cur !== oldStyle.delayed[name]) {
+          setNextFrame(elm.style, name, cur);
+        }
+      }
+    } else if (name !== 'remove' && cur !== oldStyle[name]) {
+      elm.style[name] = cur;
+    }
+  }
+}
+
+function applyDestroyStyle(vnode) {
+  var style, name, elm = vnode.elm, s = vnode.data.style;
+  if (!s || !(style = s.destroy)) return;
+  for (name in style) {
+    elm.style[name] = style[name];
+  }
+}
+
+function applyRemoveStyle(vnode, rm) {
+  var s = vnode.data.style;
+  if (!s || !s.remove) {
+    rm();
+    return;
+  }
+  var name, elm = vnode.elm, idx, i = 0, maxDur = 0,
+      compStyle, style = s.remove, amount = 0, applied = [];
+  for (name in style) {
+    applied.push(name);
+    elm.style[name] = style[name];
+  }
+  compStyle = getComputedStyle(elm);
+  var props = compStyle['transition-property'].split(', ');
+  for (; i < props.length; ++i) {
+    if(applied.indexOf(props[i]) !== -1) amount++;
+  }
+  elm.addEventListener('transitionend', function(ev) {
+    if (ev.target === elm) --amount;
+    if (amount === 0) rm();
+  });
+}
+
+module.exports = {create: updateStyle, update: updateStyle, destroy: applyDestroyStyle, remove: applyRemoveStyle};
+
+},{}],26:[function(require,module,exports){
+// jshint newcap: false
+/* global require, module, document, Element */
+'use strict';
+
+var VNode = require('./vnode');
+var is = require('./is');
+
+function isUndef(s) { return s === undefined; }
+function isDef(s) { return s !== undefined; }
+
+function emptyNodeAt(elm) {
+  return VNode(elm.tagName, {}, [], undefined, elm);
+}
+
+var emptyNode = VNode('', {}, [], undefined, undefined);
+
+function sameVnode(vnode1, vnode2) {
+  return vnode1.key === vnode2.key && vnode1.sel === vnode2.sel;
+}
+
+function createKeyToOldIdx(children, beginIdx, endIdx) {
+  var i, map = {}, key;
+  for (i = beginIdx; i <= endIdx; ++i) {
+    key = children[i].key;
+    if (isDef(key)) map[key] = i;
+  }
+  return map;
+}
+
+function createRmCb(childElm, listeners) {
+  return function() {
+    if (--listeners === 0) childElm.parentElement.removeChild(childElm);
+  };
+}
+
+var hooks = ['create', 'update', 'remove', 'destroy', 'pre', 'post'];
+
+function init(modules) {
+  var i, j, cbs = {};
+  for (i = 0; i < hooks.length; ++i) {
+    cbs[hooks[i]] = [];
+    for (j = 0; j < modules.length; ++j) {
+      if (modules[j][hooks[i]] !== undefined) cbs[hooks[i]].push(modules[j][hooks[i]]);
+    }
+  }
+
+  function createElm(vnode, insertedVnodeQueue) {
+    var i, data = vnode.data;
+    if (isDef(data)) {
+      if (isDef(i = data.hook) && isDef(i = i.init)) i(vnode);
+      if (isDef(i = data.vnode)) vnode = i;
+    }
+    var elm, children = vnode.children, sel = vnode.sel;
+    if (isDef(sel)) {
+      // Parse selector
+      var hashIdx = sel.indexOf('#');
+      var dotIdx = sel.indexOf('.', hashIdx);
+      var hash = hashIdx > 0 ? hashIdx : sel.length;
+      var dot = dotIdx > 0 ? dotIdx : sel.length;
+      var tag = hashIdx !== -1 || dotIdx !== -1 ? sel.slice(0, Math.min(hash, dot)) : sel;
+      elm = vnode.elm = isDef(data) && isDef(i = data.ns) ? document.createElementNS(i, tag)
+                                                          : document.createElement(tag);
+      if (hash < dot) elm.id = sel.slice(hash + 1, dot);
+      if (dotIdx > 0) elm.className = sel.slice(dot+1).replace(/\./g, ' ');
+      if (is.array(children)) {
+        for (i = 0; i < children.length; ++i) {
+          elm.appendChild(createElm(children[i], insertedVnodeQueue));
+        }
+      } else if (is.primitive(vnode.text)) {
+        elm.appendChild(document.createTextNode(vnode.text));
+      }
+      for (i = 0; i < cbs.create.length; ++i) cbs.create[i](emptyNode, vnode);
+      i = vnode.data.hook; // Reuse variable
+      if (isDef(i)) {
+        if (i.create) i.create(emptyNode, vnode);
+        if (i.insert) insertedVnodeQueue.push(vnode);
+      }
+    } else {
+      elm = vnode.elm = document.createTextNode(vnode.text);
+    }
+    return vnode.elm;
+  }
+
+  function addVnodes(parentElm, before, vnodes, startIdx, endIdx, insertedVnodeQueue) {
+    for (; startIdx <= endIdx; ++startIdx) {
+      parentElm.insertBefore(createElm(vnodes[startIdx], insertedVnodeQueue), before);
+    }
+  }
+
+  function invokeDestroyHook(vnode) {
+    var i = vnode.data, j;
+    if (isDef(i)) {
+      if (isDef(i = i.hook) && isDef(i = i.destroy)) i(vnode);
+      for (i = 0; i < cbs.destroy.length; ++i) cbs.destroy[i](vnode);
+      if (isDef(i = vnode.children)) {
+        for (j = 0; j < vnode.children.length; ++j) {
+          invokeDestroyHook(vnode.children[j]);
+        }
+      }
+    }
+  }
+
+  function removeVnodes(parentElm, vnodes, startIdx, endIdx) {
+    for (; startIdx <= endIdx; ++startIdx) {
+      var i, listeners, rm, ch = vnodes[startIdx];
+      if (isDef(ch)) {
+        if (isDef(ch.sel)) {
+          invokeDestroyHook(ch);
+          listeners = cbs.remove.length + 1;
+          rm = createRmCb(ch.elm, listeners);
+          for (i = 0; i < cbs.remove.length; ++i) cbs.remove[i](ch, rm);
+          if (isDef(i = ch.data) && isDef(i = i.hook) && isDef(i = i.remove)) {
+            i(ch, rm);
+          } else {
+            rm();
+          }
+        } else { // Text node
+          parentElm.removeChild(ch.elm);
+        }
+      }
+    }
+  }
+
+  function updateChildren(parentElm, oldCh, newCh, insertedVnodeQueue) {
+    var oldStartIdx = 0, newStartIdx = 0;
+    var oldEndIdx = oldCh.length - 1;
+    var oldStartVnode = oldCh[0];
+    var oldEndVnode = oldCh[oldEndIdx];
+    var newEndIdx = newCh.length - 1;
+    var newStartVnode = newCh[0];
+    var newEndVnode = newCh[newEndIdx];
+    var oldKeyToIdx, idxInOld, elmToMove, before;
+
+    while (oldStartIdx <= oldEndIdx && newStartIdx <= newEndIdx) {
+      if (isUndef(oldStartVnode)) {
+        oldStartVnode = oldCh[++oldStartIdx]; // Vnode has been moved left
+      } else if (isUndef(oldEndVnode)) {
+        oldEndVnode = oldCh[--oldEndIdx];
+      } else if (sameVnode(oldStartVnode, newStartVnode)) {
+        patchVnode(oldStartVnode, newStartVnode, insertedVnodeQueue);
+        oldStartVnode = oldCh[++oldStartIdx];
+        newStartVnode = newCh[++newStartIdx];
+      } else if (sameVnode(oldEndVnode, newEndVnode)) {
+        patchVnode(oldEndVnode, newEndVnode, insertedVnodeQueue);
+        oldEndVnode = oldCh[--oldEndIdx];
+        newEndVnode = newCh[--newEndIdx];
+      } else if (sameVnode(oldStartVnode, newEndVnode)) { // Vnode moved right
+        patchVnode(oldStartVnode, newEndVnode, insertedVnodeQueue);
+        parentElm.insertBefore(oldStartVnode.elm, oldEndVnode.elm.nextSibling);
+        oldStartVnode = oldCh[++oldStartIdx];
+        newEndVnode = newCh[--newEndIdx];
+      } else if (sameVnode(oldEndVnode, newStartVnode)) { // Vnode moved left
+        patchVnode(oldEndVnode, newStartVnode, insertedVnodeQueue);
+        parentElm.insertBefore(oldEndVnode.elm, oldStartVnode.elm);
+        oldEndVnode = oldCh[--oldEndIdx];
+        newStartVnode = newCh[++newStartIdx];
+      } else {
+        if (isUndef(oldKeyToIdx)) oldKeyToIdx = createKeyToOldIdx(oldCh, oldStartIdx, oldEndIdx);
+        idxInOld = oldKeyToIdx[newStartVnode.key];
+        if (isUndef(idxInOld)) { // New element
+          parentElm.insertBefore(createElm(newStartVnode, insertedVnodeQueue), oldStartVnode.elm);
+          newStartVnode = newCh[++newStartIdx];
+        } else {
+          elmToMove = oldCh[idxInOld];
+          patchVnode(elmToMove, newStartVnode, insertedVnodeQueue);
+          oldCh[idxInOld] = undefined;
+          parentElm.insertBefore(elmToMove.elm, oldStartVnode.elm);
+          newStartVnode = newCh[++newStartIdx];
+        }
+      }
+    }
+    if (oldStartIdx > oldEndIdx) {
+      before = isUndef(newCh[newEndIdx+1]) ? null : newCh[newEndIdx+1].elm;
+      addVnodes(parentElm, before, newCh, newStartIdx, newEndIdx, insertedVnodeQueue);
+    } else if (newStartIdx > newEndIdx) {
+      removeVnodes(parentElm, oldCh, oldStartIdx, oldEndIdx);
+    }
+  }
+
+  function patchVnode(oldVnode, vnode, insertedVnodeQueue) {
+    var i, hook;
+    if (isDef(i = vnode.data) && isDef(hook = i.hook) && isDef(i = hook.prepatch)) {
+      i(oldVnode, vnode);
+    }
+    if (isDef(i = oldVnode.data) && isDef(i = i.vnode)) oldVnode = i;
+    if (isDef(i = vnode.data) && isDef(i = i.vnode)) vnode = i;
+    var elm = vnode.elm = oldVnode.elm, oldCh = oldVnode.children, ch = vnode.children;
+    if (oldVnode === vnode) return;
+    if (isDef(vnode.data)) {
+      for (i = 0; i < cbs.update.length; ++i) cbs.update[i](oldVnode, vnode);
+      i = vnode.data.hook;
+      if (isDef(i) && isDef(i = i.update)) i(oldVnode, vnode);
+    }
+    if (isUndef(vnode.text)) {
+      if (isDef(oldCh) && isDef(ch)) {
+        if (oldCh !== ch) updateChildren(elm, oldCh, ch, insertedVnodeQueue);
+      } else if (isDef(ch)) {
+        addVnodes(elm, null, ch, 0, ch.length - 1, insertedVnodeQueue);
+      } else if (isDef(oldCh)) {
+        removeVnodes(elm, oldCh, 0, oldCh.length - 1);
+      }
+    } else if (oldVnode.text !== vnode.text) {
+      elm.textContent = vnode.text;
+    }
+    if (isDef(hook) && isDef(i = hook.postpatch)) {
+      i(oldVnode, vnode);
+    }
+  }
+
+  return function(oldVnode, vnode) {
+    var i;
+    var insertedVnodeQueue = [];
+    for (i = 0; i < cbs.pre.length; ++i) cbs.pre[i]();
+    if (oldVnode instanceof Element) {
+      if (oldVnode.parentElement !== null) {
+        createElm(vnode, insertedVnodeQueue);
+        oldVnode.parentElement.replaceChild(vnode.elm, oldVnode);
+      } else {
+        oldVnode = emptyNodeAt(oldVnode);
+        patchVnode(oldVnode, vnode, insertedVnodeQueue);
+      }
+    } else {
+      patchVnode(oldVnode, vnode, insertedVnodeQueue);
+    }
+    for (i = 0; i < insertedVnodeQueue.length; ++i) {
+      insertedVnodeQueue[i].data.hook.insert(insertedVnodeQueue[i]);
+    }
+    for (i = 0; i < cbs.post.length; ++i) cbs.post[i]();
+    return vnode;
+  };
+}
+
+module.exports = {init: init};
+
+},{"./is":20,"./vnode":27}],27:[function(require,module,exports){
+arguments[4][7][0].apply(exports,arguments)
+},{"dup":7}]},{},[3]);
