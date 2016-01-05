@@ -4,14 +4,10 @@ const Type = require('union-type');
 const h = require('snabbdom/h');
 
 
-// Model
-const init = (n) => n;
-
 // Update
 const Action = Type({Increment: [], Decrement: []});
 
-const update = R.curry((model, action) =>
-  Action.case({
+const update =R.curry((model, action) => Action.case({
     Increment: () => model + 1,
     Decrement: () => model - 1,
   }, action));
@@ -24,9 +20,16 @@ const view = R.curry((actions$, model) =>
     h('button', {on: {click: [actions$, Action.Increment()]}}, '+'),
   ]));
 
-const countStyle = {fontSize:   '20px',
-                    fontFamily: 'monospace',
-                    width:      '50px',
-                    textAlign:  'center'};
+const countStyle = {
+  fontSize: '20px',
+  fontFamily: 'monospace',
+  width: '50px',
+  textAlign: 'center',
+};
 
-module.exports = {init, Action, update, view};
+module.exports = {
+  init: R.always(0),
+  Action: Action,
+  update: update,
+  view: view,
+};
