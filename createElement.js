@@ -8,26 +8,34 @@ var patch = require('snabbdom').init([
   require('snabbdom/modules/eventlisteners')
 ]);
 
-module.exports.makeSource = function(names, fn) {
-  return { names: names, fn: fn };
-};
-
 var getNames = function(source) { return source.names; };
 var getFn = function(source) { return source.fn; };
 
-module.exports.run = function(mod, container) {
-  var action$ = flyd.stream();
+var makeSourceMap = function(action$, source) {
+  if (!source) { return {}; }
 
-  var sources = getNames(mod.source).map(function() {
+  var names = getNames(source);
+  var sources = names.map(function() {
     return flyd.stream();
   });
 
-  var sourceMap = getNames(mod.source).reduce(function(memo, name, index) {
+  var sourceMap = names.reduce(function(memo, name, index) {
     memo[name] = sources[index];
     return memo;
   }, {});
 
-  getFn(mod.source).apply(null, [action$].concat(sources));
+  getFn(source).apply(null, [action$].concat(sources));
+  return sourceMap;
+};
+
+module.exports.makeSource = function(names, fn) {
+  return { names: names, fn: fn };
+};
+
+module.exports.run = function(mod, container) {
+  var action$ = flyd.stream();
+
+  var sourceMap = makeSourceMap(action$, mod.source);
 
   var model$ = flyd.scan(
     function(state, action) {
@@ -37,7 +45,7 @@ module.exports.run = function(mod, container) {
     action$);
 
   var vnode$ = flyd.map(function(model) {
-    return mod.view(sourceMap, action$, model);
+    return mod.view(action$, model, sourceMap);
   }, model$);
 
   flyd.scan(patch, container, vnode$);
@@ -46,6 +54,6 @@ module.exports.run = function(mod, container) {
     action$: action$,
     model$: model$,
     vnode$: vnode$,
-    sources: sources,
+    sources: sourceMap,
   };
 };

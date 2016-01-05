@@ -44,7 +44,7 @@ var toInt = function(value) {
   return parseInt(value, 10);
 };
 
-var view = function(source, $action, model) {
+var view = function($action, model, source) {
   return h('div', {}, [
     h('input.weight', { on: { change: R.pipe(targetValue, toInt, source.weight) } } ),
     h('input.height', { on: { change: R.pipe(targetValue, toInt, source.height) } } ),
