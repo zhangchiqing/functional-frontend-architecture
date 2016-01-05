@@ -8,8 +8,8 @@ const h = require('snabbdom/h');
 const Action = Type({Increment: [], Decrement: []});
 
 const update = (model, action) => Action.case({
-    Increment: () => [model + 1],
-    Decrement: () => [model - 1],
+    Increment: () => model + 1,
+    Decrement: () => model - 1,
   }, action);
 
 // View
